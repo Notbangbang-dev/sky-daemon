@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use protocol::{envelope_type, AckPayload, CommandPayload, Envelope, EventPayload, HelloPayload};
+use protocol::{envelope_type, CommandPayload, Envelope, EventPayload, HelloPayload};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -150,7 +150,7 @@ mod tests {
     use super::*;
     use crate::runtime::FakeRuntime;
     use futures_util::TryStreamExt;
-    use protocol::{Action, ContainerSpec};
+    use protocol::{AckPayload, Action, ContainerSpec};
     use tokio::net::{TcpListener, TcpStream};
     use tokio_tungstenite::{accept_async, connect_async, WebSocketStream};
 

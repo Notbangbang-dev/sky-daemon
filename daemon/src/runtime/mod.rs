@@ -1,5 +1,4 @@
 mod demux;
-mod fake;
 mod stats;
 
 // The real Docker client dials a unix socket, so it (and its tests) only
@@ -11,19 +10,25 @@ mod docker;
 #[cfg(unix)]
 pub use docker::DockerRuntime;
 
+// FakeRuntime is a test double only — nothing in the production binary
+// constructs one, so it (and its ConsoleWrites recording buffer) are gated
+// out of non-test builds instead of tripping dead-code lints there.
+#[cfg(test)]
+mod fake;
+#[cfg(test)]
 pub use fake::FakeRuntime;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use protocol::ContainerSpec;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 use tokio::sync::mpsc;
 
 /// Shared, cheaply-cloneable recording buffer used by `FakeRuntime`'s
 /// console to let tests inspect what was written to a container's stdin.
-pub type ConsoleWrites = Arc<Mutex<Vec<String>>>;
+#[cfg(test)]
+pub type ConsoleWrites = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ContainerState {

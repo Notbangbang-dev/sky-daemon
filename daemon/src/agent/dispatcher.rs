@@ -217,7 +217,10 @@ impl Dispatcher {
             .with_context(|| format!("no known container for server {}", cmd.server_id))
     }
 
-    /// The container currently tracked for `server_id`, if any.
+    /// The container currently tracked for `server_id`, if any. Exists for
+    /// test observability (polling for a container to appear after a signed
+    /// `create`/`start` round trip) — not used by production code.
+    #[cfg(test)]
     pub fn container_id_for_server(&self, server_id: &str) -> Option<String> {
         self.tracked.lock().unwrap().get(server_id).cloned()
     }
