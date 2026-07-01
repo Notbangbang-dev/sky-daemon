@@ -21,7 +21,7 @@ jobs:
         with:
           command: build
           target: x86_64-unknown-linux-gnu
-          args: --release -p daemon
+          args: --release -p sky-daemon
       - run: cp target/x86_64-unknown-linux-gnu/release/sky-daemon dist/sky-daemon-linux-amd64
 
       - name: Build sky-daemon (linux/arm64)
@@ -29,7 +29,7 @@ jobs:
         with:
           command: build
           target: aarch64-unknown-linux-gnu
-          args: --release -p daemon
+          args: --release -p sky-daemon
       - run: cp target/aarch64-unknown-linux-gnu/release/sky-daemon dist/sky-daemon-linux-arm64
 
       - name: Checksums
