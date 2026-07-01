@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["skyperf-core", "protocol", "daemon"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/Notbangbang-dev/sky-daemon"
