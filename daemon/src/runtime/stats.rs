@@ -17,8 +17,6 @@ pub struct DockerStatsResponse {
     pub memory_stats: MemoryStats,
     #[serde(default)]
     pub networks: HashMap<String, NetworkStats>,
-    #[serde(default)]
-    pub blkio_stats: BlkioStats,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -59,20 +57,6 @@ pub struct NetworkStats {
     pub rx_bytes: u64,
     #[serde(default)]
     pub tx_bytes: u64,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct BlkioStats {
-    #[serde(default)]
-    pub io_service_bytes_recursive: Vec<BlkioEntry>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub struct BlkioEntry {
-    #[serde(default)]
-    pub op: String,
-    #[serde(default)]
-    pub value: u64,
 }
 
 /// Converts a raw Engine API stats payload into our `Stats` type.

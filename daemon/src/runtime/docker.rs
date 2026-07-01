@@ -262,14 +262,11 @@ impl ContainerRuntime for DockerRuntime {
         struct InspectState {
             #[serde(rename = "Running")]
             running: bool,
-            #[serde(rename = "ExitCode")]
-            exit_code: i32,
         }
         let parsed: InspectResponse =
             serde_json::from_slice(&body).context("decode inspect response")?;
         Ok(ContainerState {
             running: parsed.state.running,
-            exit_code: parsed.state.exit_code,
         })
     }
 
@@ -343,10 +340,7 @@ async fn pump_output(
     let mut splitter = LineSplitter::new();
 
     loop {
-        loop {
-            let Some(header) = parse_frame_header(&buf) else {
-                break;
-            };
+        while let Some(header) = parse_frame_header(&buf) {
             if buf.len() < 8 + header.size {
                 break;
             }

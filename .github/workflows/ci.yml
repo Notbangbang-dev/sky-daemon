@@ -19,7 +19,7 @@ jobs:
 
       - run: cargo fmt --check
 
-      - run: cargo clippy --workspace -- -D warnings
+      - run: cargo clippy --workspace --all-targets -- -D warnings
 
       - run: cargo build --workspace
 

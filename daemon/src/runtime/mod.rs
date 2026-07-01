@@ -28,7 +28,6 @@ pub type ConsoleWrites = Arc<Mutex<Vec<String>>>;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ContainerState {
     pub running: bool,
-    pub exit_code: i32,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

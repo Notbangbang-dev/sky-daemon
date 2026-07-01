@@ -109,10 +109,7 @@ impl ContainerRuntime for FakeRuntime {
         let c = containers
             .get(id)
             .ok_or_else(|| anyhow!("fake runtime: container {id} not found"))?;
-        Ok(ContainerState {
-            running: c.running,
-            exit_code: 0,
-        })
+        Ok(ContainerState { running: c.running })
     }
 
     async fn stats(&self, id: &str) -> Result<Stats> {
