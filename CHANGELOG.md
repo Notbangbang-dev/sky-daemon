@@ -2,6 +2,26 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-07-01
+
+### ✨ New Features
+
+- Backup command actions: `backup`, `list_backups`, `restore_backup`, and
+  `delete_backup`. `backup` tar+zstd's a server's volume into a timestamped
+  `backup-<unix>.tar.zst` archive under the backups root and emits a
+  `BackupDone` event; `list_backups` returns each archive's name, size, and
+  modified time (newest first); restore and delete operate on a single named
+  archive. All four validate the backup filename is a single safe component,
+  so a caller can't escape the server's backups directory.
+- New `SKY_BACKUPS_ROOT` config (default `/srv/sky-panel/backups`) for where
+  those archives live, one subdirectory per server.
+
+### 🔗 Compatibility
+
+- Pairs with **sky-panel v0.5.0**, which drives these actions from the panel's
+  new Backups tab and scheduled-backup loop. Older panels simply never send
+  the new actions.
+
 ## [0.1.0] - 2026-07-01
 
 First release. This repo replaces the Go `node-agent` that used to live in

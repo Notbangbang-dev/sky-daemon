@@ -6,6 +6,7 @@ pub struct Config {
     pub docker_socket: String,
     pub heartbeat_interval: Duration,
     pub volumes_root: String,
+    pub backups_root: String,
 }
 
 impl Config {
@@ -16,6 +17,7 @@ impl Config {
             docker_socket: env_or("SKY_DOCKER_SOCKET", "/var/run/docker.sock"),
             heartbeat_interval: env_duration_secs("SKY_HEARTBEAT_INTERVAL", Duration::from_secs(5)),
             volumes_root: env_or("SKY_VOLUMES_ROOT", "/srv/sky-panel/volumes"),
+            backups_root: env_or("SKY_BACKUPS_ROOT", "/srv/sky-panel/backups"),
         }
     }
 }

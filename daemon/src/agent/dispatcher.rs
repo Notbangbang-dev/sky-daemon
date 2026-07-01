@@ -7,13 +7,13 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use protocol::{
-    AckPayload, Action, CommandPayload, ContainerHeartbeat, EventKind, EventPayload, FileEntry,
-    HeartbeatPayload, ListFilesResult, ReadFileResult,
+    AckPayload, Action, BackupEntry, BackupResult, CommandPayload, ContainerHeartbeat, EventKind,
+    EventPayload, FileEntry, HeartbeatPayload, ListBackupsResult, ListFilesResult, ReadFileResult,
 };
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
@@ -35,6 +35,7 @@ struct ActiveConsole {
 pub struct Dispatcher {
     rt: Arc<dyn ContainerRuntime>,
     volumes_root: PathBuf,
+    backups_root: PathBuf,
     tracked: StdMutex<HashMap<String, String>>,
     /// server_id -> its one live attached console, if any. Presence in this
     /// map is what prevents `start` from attaching a second time.
@@ -49,11 +50,13 @@ impl Dispatcher {
     pub fn new(
         rt: Arc<dyn ContainerRuntime>,
         volumes_root: impl Into<PathBuf>,
+        backups_root: impl Into<PathBuf>,
     ) -> (Self, mpsc::UnboundedReceiver<EventPayload>) {
         let (events_tx, events_rx) = mpsc::unbounded_channel();
         let dispatcher = Self {
             rt,
             volumes_root: volumes_root.into(),
+            backups_root: backups_root.into(),
             tracked: StdMutex::new(HashMap::new()),
             consoles: Arc::new(StdMutex::new(HashMap::new())),
             events_tx,
@@ -191,7 +194,129 @@ impl Dispatcher {
                     .context("create directory")?;
                 Ok(None)
             }
+            Action::Backup => {
+                let result = self.create_backup(&cmd.server_id).await?;
+                self.emit_backup_event(&cmd.server_id, EventKind::BackupDone, &result.filename);
+                Ok(Some(serde_json::to_value(result)?))
+            }
+            Action::ListBackups => {
+                let backups = self.list_backups(&cmd.server_id).await?;
+                Ok(Some(serde_json::to_value(ListBackupsResult { backups })?))
+            }
+            Action::RestoreBackup => {
+                let name = cmd.path.as_deref().context("restore_backup missing path")?;
+                self.restore_backup(&cmd.server_id, name).await?;
+                Ok(None)
+            }
+            Action::DeleteBackup => {
+                let name = cmd.path.as_deref().context("delete_backup missing path")?;
+                self.delete_backup(&cmd.server_id, name).await?;
+                Ok(None)
+            }
         }
+    }
+
+    /// The on-disk directory holding a server's backup archives.
+    fn backups_dir(&self, server_id: &str) -> PathBuf {
+        self.backups_root.join(server_id)
+    }
+
+    /// tar+zstd's the server's volume into a timestamped archive under the
+    /// backups root and returns its name + size. Runs the (blocking) archive
+    /// work on a blocking thread so the async runtime isn't stalled.
+    async fn create_backup(&self, server_id: &str) -> Result<BackupResult> {
+        let src = self.volumes_root.join(server_id);
+        let dir = self.backups_dir(server_id);
+        tokio::fs::create_dir_all(&dir)
+            .await
+            .context("create backups directory")?;
+
+        let secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let filename = format!("backup-{secs}.tar.zst");
+        let dest = dir.join(&filename);
+
+        let size_bytes =
+            tokio::task::spawn_blocking(move || skyperf_core::backup::create_backup(&src, &dest))
+                .await
+                .context("backup task panicked")?
+                .context("create backup archive")?;
+
+        Ok(BackupResult {
+            filename,
+            size_bytes,
+        })
+    }
+
+    async fn list_backups(&self, server_id: &str) -> Result<Vec<BackupEntry>> {
+        let dir = self.backups_dir(server_id);
+        let mut entries = Vec::new();
+        let mut read_dir = match tokio::fs::read_dir(&dir).await {
+            Ok(rd) => rd,
+            // No backups directory yet just means no backups.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(entries),
+            Err(e) => return Err(e).context("list backups"),
+        };
+        while let Some(entry) = read_dir.next_entry().await.context("read backup entry")? {
+            let metadata = entry.metadata().await.context("stat backup")?;
+            if !metadata.is_file() {
+                continue;
+            }
+            let created_at = metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            entries.push(BackupEntry {
+                filename: entry.file_name().to_string_lossy().into_owned(),
+                size_bytes: metadata.len(),
+                created_at,
+            });
+        }
+        // Newest first.
+        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        Ok(entries)
+    }
+
+    async fn restore_backup(&self, server_id: &str, name: &str) -> Result<()> {
+        let archive = self.backup_path(server_id, name)?;
+        let dest = self.volumes_root.join(server_id);
+        tokio::task::spawn_blocking(move || skyperf_core::backup::restore_backup(&archive, &dest))
+            .await
+            .context("restore task panicked")?
+            .context("restore backup archive")?;
+        Ok(())
+    }
+
+    async fn delete_backup(&self, server_id: &str, name: &str) -> Result<()> {
+        let archive = self.backup_path(server_id, name)?;
+        tokio::fs::remove_file(&archive)
+            .await
+            .context("delete backup archive")?;
+        Ok(())
+    }
+
+    /// Resolves a backup filename to a path inside the server's backups
+    /// directory, rejecting anything that isn't a single, safe file name
+    /// (no separators, no `..`) so a caller can't escape the directory.
+    fn backup_path(&self, server_id: &str, name: &str) -> Result<PathBuf> {
+        let candidate = Path::new(name);
+        let mut components = candidate.components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(_)), None) => Ok(self.backups_dir(server_id).join(candidate)),
+            _ => bail!("invalid backup name: {name}"),
+        }
+    }
+
+    fn emit_backup_event(&self, server_id: &str, kind: EventKind, message: &str) {
+        let _ = self.events_tx.send(EventPayload {
+            server_id: server_id.to_string(),
+            kind,
+            message: message.to_string(),
+        });
     }
 
     fn track(&self, server_id: &str, container_id: &str) {
@@ -413,7 +538,9 @@ mod tests {
 
     fn dispatcher_with_volumes(volumes_root: impl Into<PathBuf>) -> (Dispatcher, Arc<FakeRuntime>) {
         let rt = Arc::new(FakeRuntime::new());
-        let (dispatcher, _events_rx) = Dispatcher::new(rt.clone(), volumes_root);
+        let volumes_root = volumes_root.into();
+        let backups_root = volumes_root.join("_backups");
+        let (dispatcher, _events_rx) = Dispatcher::new(rt.clone(), volumes_root, backups_root);
         (dispatcher, rt)
     }
 

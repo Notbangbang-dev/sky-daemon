@@ -172,8 +172,11 @@ mod tests {
     }
 
     fn test_dispatcher() -> (Arc<Dispatcher>, mpsc::UnboundedReceiver<EventPayload>) {
-        let (dispatcher, events_rx) =
-            Dispatcher::new(Arc::new(FakeRuntime::new()), std::env::temp_dir());
+        let (dispatcher, events_rx) = Dispatcher::new(
+            Arc::new(FakeRuntime::new()),
+            std::env::temp_dir(),
+            std::env::temp_dir(),
+        );
         (Arc::new(dispatcher), events_rx)
     }
 
@@ -183,7 +186,8 @@ mod tests {
         Arc<FakeRuntime>,
     ) {
         let rt = Arc::new(FakeRuntime::new());
-        let (dispatcher, events_rx) = Dispatcher::new(rt.clone(), std::env::temp_dir());
+        let (dispatcher, events_rx) =
+            Dispatcher::new(rt.clone(), std::env::temp_dir(), std::env::temp_dir());
         (Arc::new(dispatcher), events_rx, rt)
     }
 

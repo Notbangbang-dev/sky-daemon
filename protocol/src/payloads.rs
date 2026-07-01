@@ -95,6 +95,10 @@ pub enum Action {
     RenameFile,
     DeleteFile,
     Mkdir,
+    Backup,
+    ListBackups,
+    RestoreBackup,
+    DeleteBackup,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -150,6 +154,25 @@ pub struct ListFilesResult {
 pub struct ReadFileResult {
     pub content_base64: String,
     pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupResult {
+    pub filename: String,
+    pub size_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BackupEntry {
+    pub filename: String,
+    pub size_bytes: u64,
+    /// Unix seconds (the daemon has no date library; the panel/web format it).
+    pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListBackupsResult {
+    pub backups: Vec<BackupEntry>,
 }
 
 #[cfg(test)]
