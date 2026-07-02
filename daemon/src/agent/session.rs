@@ -120,7 +120,11 @@ where
     /// down); the actual command execution is spawned so a slow op (e.g. an
     /// image pull) doesn't block the select loop's heartbeats/reads. The
     /// resulting ack is funnelled back through `ack_tx` to be sent in the loop.
-    fn handle_incoming(&mut self, text: &str, ack_tx: &mpsc::UnboundedSender<AckPayload>) -> Result<()> {
+    fn handle_incoming(
+        &mut self,
+        text: &str,
+        ack_tx: &mpsc::UnboundedSender<AckPayload>,
+    ) -> Result<()> {
         let envelope: Envelope = match serde_json::from_str(text) {
             Ok(e) => e,
             Err(err) => {
