@@ -42,7 +42,10 @@ pub async fn run(
                     heartbeat_interval,
                 );
                 if let Err(err) = session.run(ct.clone(), &mut events_rx).await {
-                    error!("session ended: {err}");
+                    // `{err:#}` prints the full anyhow context chain (e.g. the
+                    // underlying serde error), not just the top-level message,
+                    // so a decode failure names the offending field/variant.
+                    error!("session ended: {err:#}");
                 }
             }
             Err(err) => {

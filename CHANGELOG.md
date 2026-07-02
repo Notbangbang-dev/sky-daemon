@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2] - 2026-07-02
+
+### 🛠 Fixes
+
+- **A `null` collection in a command no longer drops the connection.** The panel used to send `"cmd":null` for an egg with no startup command, which failed to decode ("invalid type: null, expected a sequence"), tore down the whole command, and disconnected the node — so most server creates errored with `node reported command failure: node disconnected`. The daemon now decodes a `null` list/map (in `cmd`, `env`, `binds`, `port_bindings`, `labels`) as empty instead of erroring. The panel-side fix (v0.15.1) stops sending `null` at all; this makes the daemon robust to it either way. Session errors are also now logged with their full cause chain so a decode failure names the offending field.
+
 ## [0.4.1] - 2026-07-02
 
 ### 🛠 Fixes

@@ -66,25 +66,38 @@ pub struct PortBinding {
     pub host_port: String,
 }
 
+/// Deserialize a field that may arrive as `null` (or be absent) into its
+/// default. Without this, a panel that serializes an empty collection as
+/// `null` (e.g. `"cmd":null` for an egg with no startup command) triggers an
+/// "invalid type: null, expected a sequence" error that fails the whole
+/// command decode and tears down the connection.
+fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ContainerSpec {
     pub name: String,
     pub image: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub cmd: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub env: Vec<String>,
     #[serde(default)]
     pub working_dir: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub binds: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub port_bindings: Vec<PortBinding>,
     #[serde(default)]
     pub memory_bytes: i64,
     #[serde(default)]
     pub nano_cpus: i64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_default")]
     pub labels: HashMap<String, String>,
 }
 
@@ -228,6 +241,35 @@ mod tests {
         assert!(!json.contains("container_id"));
         assert!(!json.contains("spec"));
         assert!(!json.contains("path"));
+    }
+
+    // Faithful reproductions of the exact JSON panel-api (Go) puts on the wire,
+    // to catch any Go↔Rust field/variant drift that only bites at runtime.
+    #[test]
+    fn decodes_panel_warm_pull_image_command() {
+        let json = r#"{"command_id":"abc-123","action":"pull_image","server_id":"","image":"itzg/minecraft-server"}"#;
+        let cmd: CommandPayload = serde_json::from_str(json).expect("panel pull_image must decode");
+        assert_eq!(cmd.action, Action::PullImage);
+        assert_eq!(cmd.image.as_deref(), Some("itzg/minecraft-server"));
+    }
+
+    #[test]
+    fn decodes_panel_create_command() {
+        let json = r#"{"command_id":"c2","action":"create","server_id":"s1","spec":{"name":"sky-s1","image":"itzg/minecraft-server","cmd":[],"env":["EULA=TRUE","MEMORY=5632M"],"working_dir":"/home/container","binds":["/srv/sky-panel/volumes/s1:/home/container"],"port_bindings":[{"container_port":"25565/tcp","host_port":"25565"},{"container_port":"25565/udp","host_port":"25565"}],"memory_bytes":5905580032,"nano_cpus":1000000000,"labels":{"sky-panel.server_id":"s1"}}}"#;
+        let cmd: CommandPayload = serde_json::from_str(json).expect("panel create must decode");
+        assert_eq!(cmd.action, Action::Create);
+        assert_eq!(cmd.spec.as_ref().unwrap().image, "itzg/minecraft-server");
+    }
+
+    #[test]
+    fn decodes_create_with_null_cmd() {
+        // An egg with an empty startup makes the panel send "cmd":null. This
+        // must decode (an absent command means "use the image's own CMD"), not
+        // blow up the whole connection.
+        let json = r#"{"command_id":"c3","action":"create","server_id":"s1","spec":{"name":"sky-s1","image":"itzg/minecraft-server","cmd":null,"env":["EULA=TRUE"],"working_dir":"/home/container","binds":["/v:/home/container"],"port_bindings":[],"memory_bytes":1,"nano_cpus":0,"labels":{}}}"#;
+        let cmd: CommandPayload =
+            serde_json::from_str(json).expect("create with null cmd must decode");
+        assert!(cmd.spec.as_ref().unwrap().cmd.is_empty());
     }
 
     #[test]
