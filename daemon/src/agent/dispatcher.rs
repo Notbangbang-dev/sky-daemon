@@ -92,6 +92,19 @@ impl Dispatcher {
                 self.track(&cmd.server_id, &id);
                 Ok(None)
             }
+            Action::PullImage => {
+                let image = cmd
+                    .image
+                    .as_deref()
+                    .context("pull_image command missing image")?;
+                // server_id is empty for a node-level warm-up (no console is
+                // watching); non-empty during provisioning, where these lines
+                // stream to the server's console/reinstall view.
+                self.emit_console(&cmd.server_id, &format!("[sky] pulling image {image}…"));
+                self.rt.pull(image).await?;
+                self.emit_console(&cmd.server_id, "[sky] image ready");
+                Ok(None)
+            }
             Action::Start => {
                 let id = self.container_for(cmd)?;
                 self.rt.start(&id).await?;
@@ -420,6 +433,18 @@ impl Dispatcher {
         });
     }
 
+    /// Emit a synthetic console line for a server (provisioning progress like
+    /// image pulls, which happen before any container is attached). Streams to
+    /// the server's console/reinstall view via the same event channel as real
+    /// container output.
+    fn emit_console(&self, server_id: &str, message: &str) {
+        let _ = self.events_tx.send(EventPayload {
+            server_id: server_id.to_string(),
+            kind: EventKind::ConsoleLine,
+            message: message.to_string(),
+        });
+    }
+
     /// Attaches to `container_id` once and keeps pumping its combined
     /// stdout/stderr to `events_tx` as `console_line` events for as long as
     /// the attach connection stays open. A no-op if a console for this
@@ -573,6 +598,35 @@ mod tests {
 
         // No longer tracked, so referencing it by server ID alone must fail.
         assert!(!d.handle(&cmd(Action::Start, "server-1")).await.ok);
+    }
+
+    #[tokio::test]
+    async fn pull_image_acks_ok_and_streams_console_progress() {
+        let rt = Arc::new(FakeRuntime::new());
+        let (d, mut events_rx) = Dispatcher::new(rt, std::env::temp_dir(), std::env::temp_dir());
+
+        let pull = CommandPayload {
+            command_id: "cmd-1".into(),
+            action: Action::PullImage,
+            server_id: "server-1".into(),
+            image: Some("itzg/minecraft-server".into()),
+            ..Default::default()
+        };
+        assert!(d.handle(&pull).await.ok);
+
+        // It streams a "pulling…" line and a "ready" line for the server.
+        let first = events_rx.try_recv().expect("expected a pulling event");
+        assert_eq!(first.kind, EventKind::ConsoleLine);
+        assert_eq!(first.server_id, "server-1");
+        assert!(first.message.contains("pulling"));
+        let second = events_rx.try_recv().expect("expected a ready event");
+        assert!(second.message.contains("ready"));
+    }
+
+    #[tokio::test]
+    async fn pull_image_without_image_fails() {
+        let (d, _rt) = dispatcher_with_volumes(std::env::temp_dir());
+        assert!(!d.handle(&cmd(Action::PullImage, "server-1")).await.ok);
     }
 
     #[tokio::test]

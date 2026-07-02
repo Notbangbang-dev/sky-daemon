@@ -14,7 +14,17 @@ pub mod envelope_type {
 pub struct HelloPayload {
     pub node_token: String,
     pub agent_version: String,
+    /// Capability tokens this daemon supports (e.g. `"pull_image"`). Lets the
+    /// panel avoid sending commands an older daemon wouldn't understand.
+    /// Defaults to empty when absent, so a pre-capability daemon is simply
+    /// treated as supporting nothing new.
+    #[serde(default)]
+    pub capabilities: Vec<String>,
 }
+
+/// Capability token: this daemon understands the `pull_image` command
+/// (image pre-warming), added in the v0.4.0 line.
+pub const CAP_PULL_IMAGE: &str = "pull_image";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerHeartbeat {
@@ -88,6 +98,10 @@ pub enum Action {
     Stop,
     Kill,
     Remove,
+    /// Pull (warm) a Docker image ahead of time so a later `Create` hits the
+    /// local cache instead of a multi-minute registry download. Idempotent —
+    /// a no-op when the image is already present.
+    PullImage,
     ConsoleInput,
     ListFiles,
     ReadFile,
@@ -110,6 +124,9 @@ pub struct CommandPayload {
     pub container_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec: Option<ContainerSpec>,
+    /// `pull_image`: the image reference to warm on the node.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
     /// `console_input`: the line to write to stdin.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
@@ -192,6 +209,10 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Action::Create).unwrap(),
             "\"create\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Action::PullImage).unwrap(),
+            "\"pull_image\""
         );
     }
 

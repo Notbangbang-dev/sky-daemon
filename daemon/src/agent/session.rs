@@ -68,6 +68,7 @@ where
         let hello = HelloPayload {
             node_token: self.node_token.clone(),
             agent_version: AGENT_VERSION.to_string(),
+            capabilities: vec![protocol::CAP_PULL_IMAGE.to_string()],
         };
         self.send_signed(envelope_type::HELLO, &hello)
             .await

@@ -108,6 +108,17 @@ impl DockerRuntime {
         }
         Ok(())
     }
+
+    /// Whether an image is already present in the local Docker cache. Used to
+    /// short-circuit a warm-up pull so repeatedly warming the same image
+    /// costs one cheap inspect rather than a registry round-trip.
+    async fn image_present(&self, image: &str) -> bool {
+        // Encode the ref the same way pull_image does (encode_query keeps '/'
+        // and ':' literal, so normal refs like "node:22-alpine" or
+        // "reg:5000/img:tag" are unchanged while stray chars are escaped).
+        let path = format!("/images/{}/json", encode_query(image));
+        matches!(self.request("GET", &path, None).await, Ok((200, _)))
+    }
 }
 
 /// Split an image reference into (repository, tag), defaulting the tag to
@@ -281,6 +292,13 @@ fn to_create_request(spec: &ContainerSpec) -> CreateContainerRequest {
 
 #[async_trait]
 impl ContainerRuntime for DockerRuntime {
+    async fn pull(&self, image: &str) -> Result<()> {
+        if self.image_present(image).await {
+            return Ok(());
+        }
+        self.pull_image(image).await
+    }
+
     async fn create(&self, spec: &ContainerSpec) -> Result<String> {
         let mut path = "/containers/create".to_string();
         if !spec.name.is_empty() {

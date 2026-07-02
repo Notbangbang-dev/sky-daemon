@@ -54,6 +54,10 @@ pub struct Console {
 
 #[async_trait]
 pub trait ContainerRuntime: Send + Sync {
+    /// Ensure an image is present locally, pulling it if missing. Idempotent
+    /// and cheap when the image is already cached, so it's safe to call as a
+    /// warm-up ahead of `create` (which is what keeps first-boot fast).
+    async fn pull(&self, image: &str) -> Result<()>;
     async fn create(&self, spec: &ContainerSpec) -> Result<String>;
     async fn start(&self, id: &str) -> Result<()>;
     async fn stop(&self, id: &str, timeout: Duration) -> Result<()>;

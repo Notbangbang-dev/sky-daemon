@@ -60,6 +60,10 @@ impl FakeRuntime {
 
 #[async_trait]
 impl ContainerRuntime for FakeRuntime {
+    async fn pull(&self, _image: &str) -> Result<()> {
+        Ok(())
+    }
+
     async fn create(&self, _spec: &ContainerSpec) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         self.containers.lock().unwrap().insert(
