@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3] - 2026-07-02
+
+### 🛠 Fixes
+
+- **Server images that drop privileges now start (`failed switching to 'minecraft:minecraft': operation not permitted`).** The daemon hardened containers with `CapDrop: ALL`, which strips `CAP_SETUID`/`CAP_SETGID`/`CAP_CHOWN` — but many server images (itzg/minecraft-server, SteamCMD-based images, …) start as root and drop to an unprivileged user at boot, which needs those. Containers now keep Docker's **default** capability set (which already excludes the dangerous caps like `SYS_ADMIN`/`NET_ADMIN`/`SYS_PTRACE`), while `no-new-privileges`, memory/CPU limits and non-privileged mode stay in place. Update the node and reinstall the server.
+
 ## [0.4.2] - 2026-07-02
 
 ### 🛠 Fixes

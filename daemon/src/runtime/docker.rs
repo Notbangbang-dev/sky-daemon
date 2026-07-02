@@ -246,7 +246,7 @@ struct HostConfig {
     memory: i64,
     #[serde(rename = "NanoCpus")]
     nano_cpus: i64,
-    #[serde(rename = "CapDrop")]
+    #[serde(rename = "CapDrop", skip_serializing_if = "Vec::is_empty")]
     cap_drop: Vec<String>,
     #[serde(rename = "SecurityOpt")]
     security_opt: Vec<String>,
@@ -282,9 +282,16 @@ fn to_create_request(spec: &ContainerSpec) -> CreateContainerRequest {
             port_bindings,
             memory: spec.memory_bytes,
             nano_cpus: spec.nano_cpus,
-            // Secure-by-default: no capabilities beyond what the image
-            // itself needs, no privilege escalation.
-            cap_drop: vec!["ALL".to_string()],
+            // Keep Docker's default capability set rather than dropping ALL.
+            // Dropping ALL strips CAP_SETUID/CAP_SETGID/CAP_CHOWN, which the
+            // common server-image pattern needs — images like
+            // itzg/minecraft-server start as root and drop to an unprivileged
+            // user at boot ("failed switching to 'minecraft:minecraft':
+            // operation not permitted" otherwise). Docker's defaults already
+            // exclude the genuinely dangerous caps (SYS_ADMIN, NET_ADMIN,
+            // SYS_PTRACE, SYS_MODULE, …), and no-new-privileges still blocks
+            // setuid-bit privilege escalation.
+            cap_drop: vec![],
             security_opt: vec!["no-new-privileges".to_string()],
         },
     }
@@ -574,13 +581,16 @@ mod tests {
     }
 
     #[test]
-    fn to_create_request_always_drops_all_capabilities() {
+    fn to_create_request_keeps_default_caps_with_no_new_privileges() {
         let spec = ContainerSpec {
             image: "test".into(),
             ..Default::default()
         };
         let req = to_create_request(&spec);
-        assert_eq!(req.host_config.cap_drop, vec!["ALL".to_string()]);
+        // Must NOT drop ALL — that strips CAP_SETUID/SETGID and breaks images
+        // that drop from root to an unprivileged user at boot. We keep Docker's
+        // default (safe) cap set and rely on no-new-privileges for hardening.
+        assert!(!req.host_config.cap_drop.contains(&"ALL".to_string()));
         assert_eq!(
             req.host_config.security_opt,
             vec!["no-new-privileges".to_string()]
