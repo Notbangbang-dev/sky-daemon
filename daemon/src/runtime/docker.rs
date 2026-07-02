@@ -84,6 +84,101 @@ impl DockerRuntime {
             extract_docker_error(&body_bytes)
         )
     }
+
+    /// Pull an image via the Docker Engine API, blocking until the pull
+    /// finishes (the streamed response ends). `/images/create` returns 200 up
+    /// front and streams NDJSON progress; a failure is reported as an
+    /// `{"error":...}` object within that stream even though the status is 200,
+    /// so we scan for it.
+    async fn pull_image(&self, image: &str) -> Result<()> {
+        let (name, tag) = split_image_ref(image);
+        let mut path = format!("/images/create?fromImage={}", encode_query(&name));
+        if !tag.is_empty() {
+            path.push_str(&format!("&tag={}", encode_query(&tag)));
+        }
+        let (status, body) = self.request("POST", &path, None).await?;
+        if status != 200 {
+            bail!(
+                "pull image {image}: unexpected status {status}: {}",
+                extract_docker_error(&body)
+            );
+        }
+        if let Some(msg) = extract_pull_error(&body) {
+            bail!("pull image {image}: {msg}");
+        }
+        Ok(())
+    }
+}
+
+/// Split an image reference into (repository, tag), defaulting the tag to
+/// "latest". Only a ':' in the final path segment marks a tag, so a registry
+/// host:port ("reg:5000/img") isn't mistaken for one; a digest ref
+/// ("name@sha256:…") has no tag (empty string — the caller omits the tag param).
+fn split_image_ref(image: &str) -> (String, String) {
+    let seg_start = image.rfind('/').map_or(0, |i| i + 1);
+    let segment = &image[seg_start..];
+    if segment.contains('@') {
+        return (image.to_string(), String::new());
+    }
+    if let Some(rel) = segment.rfind(':') {
+        let colon = seg_start + rel;
+        let tag = &image[colon + 1..];
+        if !tag.is_empty() {
+            return (image[..colon].to_string(), tag.to_string());
+        }
+    }
+    (image.to_string(), "latest".to_string())
+}
+
+/// Percent-encode a query-string value, leaving characters that are valid and
+/// safe inside an image reference ('/' and ':') intact so Docker reads them
+/// literally, while escaping anything that would otherwise break the query
+/// (e.g. '&', '=', '?', '#', whitespace).
+fn encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
+/// Scan an `/images/create` NDJSON progress stream for a terminal error.
+/// Docker reports pull failures as either `{"error":"…"}` or a nested
+/// `{"errorDetail":{"message":"…"}}`, so check both.
+fn extract_pull_error(body: &[u8]) -> Option<String> {
+    #[derive(Deserialize)]
+    struct ErrDetail {
+        message: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct Line {
+        error: Option<String>,
+        #[serde(rename = "errorDetail")]
+        error_detail: Option<ErrDetail>,
+    }
+    for line in body.split(|&b| b == b'\n') {
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        if let Ok(l) = serde_json::from_slice::<Line>(line) {
+            if let Some(e) = l.error {
+                if !e.is_empty() {
+                    return Some(e);
+                }
+            }
+            if let Some(msg) = l.error_detail.and_then(|d| d.message) {
+                if !msg.is_empty() {
+                    return Some(msg);
+                }
+            }
+        }
+    }
+    None
 }
 
 fn parse_response(buf: &[u8]) -> Result<(u16, Vec<u8>)> {
@@ -194,9 +289,24 @@ impl ContainerRuntime for DockerRuntime {
         }
 
         let body_bytes = serde_json::to_vec(&to_create_request(spec))?;
-        let body = self
-            .expect("POST", &path, Some(&body_bytes), &[201])
-            .await?;
+
+        // Docker's create endpoint does NOT pull — a missing image returns 404.
+        // On a fresh node the egg's image won't be present, so pull it and
+        // retry once. (This can take a while for large images; the panel
+        // provisions asynchronously to accommodate that.)
+        let (status, body) = self.request("POST", &path, Some(&body_bytes)).await?;
+        let body = match status {
+            201 => body,
+            404 => {
+                self.pull_image(&spec.image).await?;
+                self.expect("POST", &path, Some(&body_bytes), &[201])
+                    .await?
+            }
+            other => bail!(
+                "docker api POST {path}: unexpected status {other}: {}",
+                extract_docker_error(&body)
+            ),
+        };
 
         #[derive(Deserialize)]
         struct CreateResponse {
@@ -367,6 +477,59 @@ async fn pump_output(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_image_ref_handles_tags_registries_and_defaults() {
+        assert_eq!(
+            split_image_ref("itzg/minecraft-server"),
+            ("itzg/minecraft-server".into(), "latest".into())
+        );
+        assert_eq!(
+            split_image_ref("node:22-alpine"),
+            ("node".into(), "22-alpine".into())
+        );
+        assert_eq!(
+            split_image_ref("itzg/minecraft-server:java21"),
+            ("itzg/minecraft-server".into(), "java21".into())
+        );
+        // A registry host:port must not be mistaken for a tag.
+        assert_eq!(
+            split_image_ref("registry.example.com:5000/team/img"),
+            ("registry.example.com:5000/team/img".into(), "latest".into())
+        );
+        assert_eq!(
+            split_image_ref("registry.example.com:5000/team/img:v2"),
+            ("registry.example.com:5000/team/img".into(), "v2".into())
+        );
+        // A digest ref has no tag.
+        assert_eq!(
+            split_image_ref("itzg/minecraft-server@sha256:abc123"),
+            ("itzg/minecraft-server@sha256:abc123".into(), String::new())
+        );
+    }
+
+    #[test]
+    fn encode_query_escapes_only_unsafe_chars() {
+        assert_eq!(
+            encode_query("itzg/minecraft-server"),
+            "itzg/minecraft-server"
+        );
+        assert_eq!(encode_query("node:22-alpine"), "node:22-alpine");
+        assert_eq!(encode_query("weird&tag=x"), "weird%26tag%3Dx");
+    }
+
+    #[test]
+    fn extract_pull_error_finds_terminal_error_in_stream() {
+        let ok = b"{\"status\":\"Pulling\"}\n{\"status\":\"Download complete\"}\n";
+        assert_eq!(extract_pull_error(ok), None);
+
+        let failed = b"{\"status\":\"Pulling\"}\n{\"error\":\"manifest unknown\"}\n";
+        assert_eq!(extract_pull_error(failed), Some("manifest unknown".into()));
+
+        // Docker sometimes only populates the nested errorDetail.
+        let detail = b"{\"errorDetail\":{\"message\":\"not found\"}}\n";
+        assert_eq!(extract_pull_error(detail), Some("not found".into()));
+    }
 
     #[test]
     fn to_create_request_groups_port_bindings_by_container_port() {

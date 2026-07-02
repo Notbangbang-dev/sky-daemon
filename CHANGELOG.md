@@ -2,6 +2,18 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-07-02
+
+### 🛠 Fixes
+
+- **Pull the image on create.** Docker's create endpoint doesn't pull, so on a
+  fresh node the egg's image was missing and container creation failed. `create`
+  now detects the missing-image 404, pulls the image (`POST /images/create`,
+  blocking until the pull finishes), and retries — so a brand-new node can host
+  a server without any manual `docker pull`. Pull failures (bad tag, etc.) are
+  surfaced from the streamed progress. Pairs with sky-panel v0.11.0, which
+  provisions asynchronously to accommodate the (potentially minutes-long) pull.
+
 ## [0.2.0] - 2026-07-01
 
 ### ✨ New Features
