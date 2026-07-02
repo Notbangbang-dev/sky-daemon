@@ -116,6 +116,7 @@ impl DockerRuntime {
     ///   failed create, or the daemon lost its in-memory tracking on restart) —
     ///   remove it by name and retry. The volume is a bind mount, so removing
     ///   the container never touches the server's files.
+    ///
     /// Each recovery happens at most once, so a persistent failure still surfaces
     /// instead of looping.
     async fn create_container(
