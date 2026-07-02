@@ -2,6 +2,18 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1] - 2026-07-02
+
+### 🛠 Fixes
+
+- **Nodes no longer drop out mid-provision ("node disconnected").** Commands are now dispatched off the connection's event loop, so a slow operation — most importantly a first-time image pull, which can take minutes — no longer blocks heartbeats and inbound reads. Before this, the loop went silent for the whole pull and the idle connection got reaped, so creating a server on a large image (e.g. a Minecraft server) often failed with `node reported command failure: node disconnected`. Heartbeats (every 5s) now keep flowing throughout a pull, and the pull finishes in the background even if the connection blips — warming the cache for the next attempt.
+
+## [0.4.0] - 2026-07-02
+
+### ✨ New Features
+
+- **`pull_image` command + capability handshake.** The daemon can now pre-pull (warm) an egg's image ahead of time, so a later `create` hits the local cache instead of a multi-minute registry download. It's idempotent (a no-op when the image is already present) and streams "pulling…/ready" progress to the server console. The daemon advertises a `pull_image` capability in its hello so an updated panel only sends the command to daemons that understand it — older panels and daemons keep working unchanged.
+
 ## [0.3.0] - 2026-07-02
 
 ### 🛠 Fixes

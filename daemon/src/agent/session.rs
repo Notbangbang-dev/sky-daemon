@@ -6,7 +6,7 @@
 
 use anyhow::{bail, Context, Result};
 use futures_util::{Sink, SinkExt, Stream, StreamExt};
-use protocol::{envelope_type, CommandPayload, Envelope, EventPayload, HelloPayload};
+use protocol::{envelope_type, AckPayload, CommandPayload, Envelope, EventPayload, HelloPayload};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
@@ -77,6 +77,14 @@ where
         let mut heartbeat_timer = tokio::time::interval(self.heartbeat_interval);
         heartbeat_timer.tick().await; // consume the immediate first tick
 
+        // Commands are dispatched off this select loop (see handle_incoming) so a
+        // slow operation — notably a first-time image pull, which can take
+        // minutes — can't block heartbeats and inbound reads. A stalled loop
+        // stops answering, and an idle connection gets reaped ("node
+        // disconnected"). Finished acks are funnelled back here to be sent in
+        // order with everything else on the wire.
+        let (ack_tx, mut ack_rx) = mpsc::unbounded_channel::<AckPayload>();
+
         loop {
             tokio::select! {
                 _ = ct.cancelled() => return Ok(()),
@@ -89,11 +97,16 @@ where
                         self.send_signed(envelope_type::EVENT, &event).await.context("send event")?;
                     }
                 }
+                ack = ack_rx.recv() => {
+                    if let Some(ack) = ack {
+                        self.send_signed(envelope_type::ACK, &ack).await.context("send ack")?;
+                    }
+                }
                 msg = self.ws.next() => {
                     match msg {
                         None => return Ok(()),
                         Some(Err(err)) => return Err(err.into()),
-                        Some(Ok(Message::Text(text))) => self.handle_incoming(text.as_str()).await?,
+                        Some(Ok(Message::Text(text))) => self.handle_incoming(text.as_str(), &ack_tx)?,
                         Some(Ok(Message::Close(_))) => return Ok(()),
                         Some(Ok(_)) => {} // ping/pong/binary frames need no application-level handling
                     }
@@ -102,7 +115,12 @@ where
         }
     }
 
-    async fn handle_incoming(&mut self, text: &str) -> Result<()> {
+    /// Parses, verifies and dispatches an inbound message. Verification and
+    /// nonce checks run inline (fast, and a failure must tear the connection
+    /// down); the actual command execution is spawned so a slow op (e.g. an
+    /// image pull) doesn't block the select loop's heartbeats/reads. The
+    /// resulting ack is funnelled back through `ack_tx` to be sent in the loop.
+    fn handle_incoming(&mut self, text: &str, ack_tx: &mpsc::UnboundedSender<AckPayload>) -> Result<()> {
         let envelope: Envelope = match serde_json::from_str(text) {
             Ok(e) => e,
             Err(err) => {
@@ -128,10 +146,13 @@ where
         let cmd: CommandPayload = envelope
             .decode_payload()
             .context("decode command payload")?;
-        let ack = self.dispatcher.handle(&cmd).await;
-        self.send_signed(envelope_type::ACK, &ack)
-            .await
-            .context("send ack")?;
+        let dispatcher = self.dispatcher.clone();
+        let ack_tx = ack_tx.clone();
+        tokio::spawn(async move {
+            let ack = dispatcher.handle(&cmd).await;
+            // Send-failure just means the connection went away; the ack is moot.
+            let _ = ack_tx.send(ack);
+        });
         Ok(())
     }
 
