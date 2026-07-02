@@ -109,6 +109,57 @@ impl DockerRuntime {
         Ok(())
     }
 
+    /// POST the create request, transparently recovering from the two expected
+    /// soft failures so provisioning is idempotent:
+    /// - **404**: the image isn't present — pull it and retry.
+    /// - **409**: the name is already taken by a leftover container (a previous
+    ///   failed create, or the daemon lost its in-memory tracking on restart) —
+    ///   remove it by name and retry. The volume is a bind mount, so removing
+    ///   the container never touches the server's files.
+    /// Each recovery happens at most once, so a persistent failure still surfaces
+    /// instead of looping.
+    async fn create_container(
+        &self,
+        path: &str,
+        body: &[u8],
+        image: &str,
+        name: &str,
+    ) -> Result<Vec<u8>> {
+        let mut pulled = false;
+        let mut cleared = false;
+        loop {
+            let (status, resp) = self.request("POST", path, Some(body)).await?;
+            match status {
+                201 => return Ok(resp),
+                404 if !pulled => {
+                    self.pull_image(image).await?;
+                    pulled = true;
+                }
+                409 if !cleared && !name.is_empty() => {
+                    self.remove_by_name(name).await?;
+                    cleared = true;
+                }
+                other => bail!(
+                    "docker api POST {path}: unexpected status {other}: {}",
+                    extract_docker_error(&resp)
+                ),
+            }
+        }
+    }
+
+    /// Force-remove a container by name, treating "already gone" (404) as
+    /// success. force=true stops it first; the bind-mounted volume is untouched.
+    async fn remove_by_name(&self, name: &str) -> Result<()> {
+        self.expect(
+            "DELETE",
+            &format!("/containers/{name}?force=true"),
+            None,
+            &[204, 404],
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Whether an image is already present in the local Docker cache. Used to
     /// short-circuit a warm-up pull so repeatedly warming the same image
     /// costs one cheap inspect rather than a registry round-trip.
@@ -314,24 +365,9 @@ impl ContainerRuntime for DockerRuntime {
         }
 
         let body_bytes = serde_json::to_vec(&to_create_request(spec))?;
-
-        // Docker's create endpoint does NOT pull — a missing image returns 404.
-        // On a fresh node the egg's image won't be present, so pull it and
-        // retry once. (This can take a while for large images; the panel
-        // provisions asynchronously to accommodate that.)
-        let (status, body) = self.request("POST", &path, Some(&body_bytes)).await?;
-        let body = match status {
-            201 => body,
-            404 => {
-                self.pull_image(&spec.image).await?;
-                self.expect("POST", &path, Some(&body_bytes), &[201])
-                    .await?
-            }
-            other => bail!(
-                "docker api POST {path}: unexpected status {other}: {}",
-                extract_docker_error(&body)
-            ),
-        };
+        let body = self
+            .create_container(&path, &body_bytes, &spec.image, &spec.name)
+            .await?;
 
         #[derive(Deserialize)]
         struct CreateResponse {

@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.4] - 2026-07-02
+
+### 🛠 Fixes
+
+- **Reinstalls/creates no longer fail with `409 Conflict … container name is already in use`.** A leftover container from a previous failed create (or one the daemon lost track of after a restart, since tracking is in-memory) held the `sky-<id>` name, so the next create collided. `create` now self-heals: on a name conflict it force-removes the clashing container by name and retries. The volume is a host bind mount, so the server's files are untouched. This also lets the panel drop its separate pre-remove step, which could otherwise race the create.
+
 ## [0.4.3] - 2026-07-02
 
 ### 🛠 Fixes
