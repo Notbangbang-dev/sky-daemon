@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.6] - 2026-07-04
+
+### 🛠 Fixes
+
+- **Startup reconcile now also matches containers by name**, not just the `sky-panel.server_id` label. `list_managed` lists every container and recovers the ones this daemon created from the label **or** the `sky-<serverID>` name — so a running server whose label was cleared/lost (or that predates it) is re-tracked after a daemon restart instead of its live stats going dark until a reinstall.
+
 ## [0.4.5] - 2026-07-04
 
 ### 🛠 Fixes

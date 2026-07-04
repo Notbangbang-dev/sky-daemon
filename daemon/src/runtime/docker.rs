@@ -197,6 +197,20 @@ fn split_image_ref(image: &str) -> (String, String) {
 /// safe inside an image reference ('/' and ':') intact so Docker reads them
 /// literally, while escaping anything that would otherwise break the query
 /// (e.g. '&', '=', '?', '#', whitespace).
+/// Whether `s` has the shape of a server id (a UUID: 8-4-4-4-12 lowercase-hex
+/// with hyphens). Used to gate the container-name reconcile fallback so only
+/// "sky-<uuid>" containers this daemon created are matched, never a foreign
+/// "sky-*" name on the shared host.
+fn looks_like_server_id(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    s.bytes().enumerate().all(|(i, b)| match i {
+        8 | 13 | 18 | 23 => b == b'-',
+        _ => b.is_ascii_hexdigit(),
+    })
+}
+
 fn encode_query(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
@@ -381,22 +395,22 @@ impl ContainerRuntime for DockerRuntime {
     }
 
     async fn list_managed(&self) -> Result<Vec<ManagedContainer>> {
-        // Filter to containers carrying our label so we never touch anything
-        // the daemon didn't create. all=true so stopped containers are included.
-        let filters = encode_query(r#"{"label":["sky-panel.server_id"]}"#);
+        // List every container (all=true includes stopped) and recover the ones
+        // this daemon created. We identify them two ways and take whichever is
+        // present: the sky-panel.server_id label, or the container name
+        // "sky-<serverID>". Relying on the name too means a container whose
+        // label was cleared/lost (or predates it) is still re-tracked, instead
+        // of its stats going dark until a reinstall.
         let body = self
-            .expect(
-                "GET",
-                &format!("/containers/json?all=true&filters={filters}"),
-                None,
-                &[200],
-            )
+            .expect("GET", "/containers/json?all=true", None, &[200])
             .await?;
 
         #[derive(Deserialize)]
         struct ListItem {
             #[serde(rename = "Id")]
             id: String,
+            #[serde(rename = "Names", default)]
+            names: Vec<String>,
             #[serde(rename = "Labels", default)]
             labels: std::collections::HashMap<String, String>,
         }
@@ -406,13 +420,29 @@ impl ContainerRuntime for DockerRuntime {
         Ok(items
             .into_iter()
             .filter_map(|it| {
-                it.labels
+                // Prefer the label; fall back to the "sky-<id>" name. Docker
+                // returns names with a leading slash (e.g. "/sky-<id>").
+                let from_label = it
+                    .labels
                     .get("sky-panel.server_id")
                     .filter(|s| !s.is_empty())
-                    .map(|server_id| ManagedContainer {
-                        server_id: server_id.clone(),
-                        container_id: it.id,
-                    })
+                    .cloned();
+                // The name fallback must require a real server-id (UUID) suffix,
+                // not just any "sky-*" name: the daemon talks to the host's
+                // Docker, so it can see unrelated containers ("sky-panel",
+                // "sky-cache", …). Real servers are always "sky-<uuid>", so
+                // gating on UUID shape keeps recovery working while never
+                // tracking a foreign container we didn't create.
+                let from_name = it.names.iter().find_map(|n| {
+                    n.trim_start_matches('/')
+                        .strip_prefix("sky-")
+                        .filter(|s| looks_like_server_id(s))
+                        .map(|s| s.to_string())
+                });
+                from_label.or(from_name).map(|server_id| ManagedContainer {
+                    server_id,
+                    container_id: it.id,
+                })
             })
             .collect())
     }
@@ -605,6 +635,22 @@ mod tests {
             split_image_ref("itzg/minecraft-server@sha256:abc123"),
             ("itzg/minecraft-server@sha256:abc123".into(), String::new())
         );
+    }
+
+    #[test]
+    fn looks_like_server_id_accepts_uuids_rejects_foreign_names() {
+        assert!(looks_like_server_id("b24aa5c8-a1ab-4a42-9edd-956dd23d017f"));
+        // foreign "sky-*" suffixes must NOT match
+        assert!(!looks_like_server_id("panel"));
+        assert!(!looks_like_server_id("cache"));
+        assert!(!looks_like_server_id(""));
+        assert!(!looks_like_server_id("b24aa5c8-a1ab-4a42-9edd-956dd23d017")); // too short
+        assert!(!looks_like_server_id(
+            "b24aa5c8xa1abx4a42x9eddx956dd23d017f"
+        )); // no hyphens
+        assert!(!looks_like_server_id(
+            "g24aa5c8-a1ab-4a42-9edd-956dd23d017f"
+        )); // non-hex
     }
 
     #[test]
