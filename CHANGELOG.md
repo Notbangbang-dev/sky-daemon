@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.8] - 2026-07-04
+
+### 🛠 Fixes
+
+- **Reinstall no longer fails with "port is already allocated".** When starting a container fails because a leftover container is still bound to its host port, the daemon now frees that port and retries the start once — the same self-healing idea as the existing container-name conflict recovery. The cleanup is strictly guarded: it only ever force-removes containers **this daemon created** (by the `sky-panel.server_id` label or a `sky-<uuid>` name), and among those only the same server's leftover instance or one that isn't running — so a foreign container on the host, or a healthy different server, that merely shares a port number is never touched.
+
 ## [0.4.7] - 2026-07-04
 
 ### 🛠 Fixes

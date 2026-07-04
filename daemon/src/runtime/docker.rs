@@ -171,6 +171,106 @@ impl DockerRuntime {
         let path = format!("/images/{}/json", encode_query(image));
         matches!(self.request("GET", &path, None).await, Ok((200, _)))
     }
+
+    /// The host ports `id` asks to publish (from its HostConfig.PortBindings).
+    async fn container_host_ports(&self, id: &str) -> Result<Vec<u16>> {
+        let body = self
+            .expect("GET", &format!("/containers/{id}/json"), None, &[200])
+            .await?;
+        #[derive(Deserialize)]
+        struct Inspect {
+            #[serde(rename = "HostConfig", default)]
+            host_config: HostConfig,
+        }
+        #[derive(Deserialize, Default)]
+        struct HostConfig {
+            #[serde(rename = "PortBindings", default)]
+            port_bindings: HashMap<String, Option<Vec<Binding>>>,
+        }
+        #[derive(Deserialize)]
+        struct Binding {
+            #[serde(rename = "HostPort", default)]
+            host_port: String,
+        }
+        let parsed: Inspect = serde_json::from_slice(&body).context("decode inspect ports")?;
+        let mut ports = Vec::new();
+        for list in parsed.host_config.port_bindings.values().flatten() {
+            for b in list {
+                if let Ok(p) = b.host_port.parse::<u16>() {
+                    ports.push(p);
+                }
+            }
+        }
+        Ok(ports)
+    }
+
+    /// Free a leftover container that still holds a host port `target` wants to
+    /// bind. Strictly guarded so it can only ever remove containers WE created
+    /// (by the sky-panel.server_id label or a "sky-<uuid>" name) — never a
+    /// foreign workload on the shared host that merely shares a port number —
+    /// and, among ours, only the same server's old instance or one that isn't
+    /// running. A healthy *different* server that (shouldn't but) collides is
+    /// left alone so the real conflict surfaces instead of causing an outage.
+    /// Best-effort — a failure here just lets the caller's retry surface it.
+    async fn free_conflicting_ports(&self, target: &str) {
+        let wanted = match self.container_host_ports(target).await {
+            Ok(p) if !p.is_empty() => p,
+            _ => return,
+        };
+        let Ok(body) = self
+            .expect("GET", "/containers/json?all=true", None, &[200])
+            .await
+        else {
+            return;
+        };
+        #[derive(Deserialize)]
+        struct Port {
+            #[serde(rename = "PublicPort")]
+            public_port: Option<u16>,
+        }
+        #[derive(Deserialize)]
+        struct Item {
+            #[serde(rename = "Id")]
+            id: String,
+            #[serde(rename = "Names", default)]
+            names: Vec<String>,
+            #[serde(rename = "Labels", default)]
+            labels: HashMap<String, String>,
+            #[serde(rename = "State", default)]
+            state: String,
+            #[serde(rename = "Ports", default)]
+            ports: Vec<Port>,
+        }
+        let Ok(items) = serde_json::from_slice::<Vec<Item>>(&body) else {
+            return;
+        };
+        let target_sid = items
+            .iter()
+            .find(|it| it.id == target)
+            .and_then(|it| server_id_from(&it.names, &it.labels));
+        for it in items {
+            if it.id == target {
+                continue;
+            }
+            let conflicts = it
+                .ports
+                .iter()
+                .any(|p| p.public_port.is_some_and(|pp| wanted.contains(&pp)));
+            if !conflicts {
+                continue;
+            }
+            // Only ever touch containers this daemon created.
+            let Some(sid) = server_id_from(&it.names, &it.labels) else {
+                continue;
+            };
+            let same_server = target_sid.as_deref() == Some(sid.as_str());
+            let running = it.state.eq_ignore_ascii_case("running");
+            if same_server || !running {
+                // remove_by_name takes the path segment, which accepts an id too.
+                let _ = self.remove_by_name(&it.id).await;
+            }
+        }
+    }
 }
 
 /// Split an image reference into (repository, tag), defaulting the tag to
@@ -208,6 +308,23 @@ fn looks_like_server_id(s: &str) -> bool {
     s.bytes().enumerate().all(|(i, b)| match i {
         8 | 13 | 18 | 23 => b == b'-',
         _ => b.is_ascii_hexdigit(),
+    })
+}
+
+/// Extract the sky server id from a container's names/labels — the
+/// `sky-panel.server_id` label, or a "sky-<uuid>" name. `None` if the container
+/// isn't one we created (so callers never act on foreign containers).
+fn server_id_from(names: &[String], labels: &HashMap<String, String>) -> Option<String> {
+    if let Some(v) = labels.get("sky-panel.server_id") {
+        if !v.is_empty() {
+            return Some(v.clone());
+        }
+    }
+    names.iter().find_map(|n| {
+        n.trim_start_matches('/')
+            .strip_prefix("sky-")
+            .filter(|s| looks_like_server_id(s))
+            .map(|s| s.to_string())
     })
 }
 
@@ -448,14 +565,32 @@ impl ContainerRuntime for DockerRuntime {
     }
 
     async fn start(&self, id: &str) -> Result<()> {
-        self.expect(
-            "POST",
-            &format!("/containers/{id}/start"),
-            None,
-            &[204, 304],
-        )
-        .await?;
-        Ok(())
+        let (status, body) = self
+            .request("POST", &format!("/containers/{id}/start"), None)
+            .await?;
+        if status == 204 || status == 304 {
+            return Ok(());
+        }
+        let err = extract_docker_error(&body);
+        // Self-heal a port conflict the same way create_container self-heals a
+        // name conflict: a leftover container (e.g. an old one from a failed
+        // reinstall) still holds our host port, so "port is already allocated".
+        // Free the port(s) this container wants by force-removing whatever else
+        // publishes them, then retry start once.
+        if status == 500
+            && (err.contains("port is already allocated") || err.contains("address already in use"))
+        {
+            self.free_conflicting_ports(id).await;
+            self.expect(
+                "POST",
+                &format!("/containers/{id}/start"),
+                None,
+                &[204, 304],
+            )
+            .await?;
+            return Ok(());
+        }
+        bail!("docker api POST /containers/{id}/start: unexpected status {status}: {err}");
     }
 
     async fn stop(&self, id: &str, timeout: Duration) -> Result<()> {
