@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.5] - 2026-07-04
+
+### 🛠 Fixes
+
+- **Live stats survive a daemon restart.** The dispatcher's server-id → container-id map was in-memory only, so after a restart it started empty: heartbeats reported nothing and the panel's CPU/memory/network cards sat on a dash for still-running servers until the panel happened to send another create/start. The daemon now **reconciles running containers on startup** — it lists containers carrying the `sky-panel.server_id` label and rebuilds its tracking — so stats and heartbeats resume immediately after a restart.
+
 ## [0.4.4] - 2026-07-02
 
 ### 🛠 Fixes
