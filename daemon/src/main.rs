@@ -19,8 +19,10 @@ async fn main() {
         std::process::exit(1);
     }
 
-    let rt: Arc<dyn runtime::ContainerRuntime> =
-        Arc::new(runtime::DockerRuntime::new(cfg.docker_socket.clone()));
+    let rt: Arc<dyn runtime::ContainerRuntime> = Arc::new(runtime::DockerRuntime::new(
+        cfg.docker_socket.clone(),
+        cfg.container_dns.clone(),
+    ));
     let (dispatcher, events_rx) =
         agent::Dispatcher::new(rt, cfg.volumes_root.clone(), cfg.backups_root.clone());
     let dispatcher = Arc::new(dispatcher);

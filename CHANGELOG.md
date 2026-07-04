@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.9] - 2026-07-04
+
+### 🛠 Fixes
+
+- **Containers now get working DNS.** Server installs could fail to resolve download hosts (e.g. `install-paper` → `Failed to resolve 'fill.papermc.io'`) when the container inherited the node's own resolver — notably on EC2, where a VPC resolver + `*.compute.internal` search domain fails these public lookups. Created containers now use public DNS (`1.1.1.1`, `8.8.8.8`) by default so installs resolve regardless of the node's `/etc/resolv.conf`. Override with `SKY_CONTAINER_DNS` (comma-separated; set it empty to fall back to Docker's default). Existing servers pick this up on their next reinstall.
+
 ## [0.4.8] - 2026-07-04
 
 ### 🛠 Fixes

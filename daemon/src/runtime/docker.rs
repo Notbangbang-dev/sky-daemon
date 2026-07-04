@@ -25,12 +25,15 @@ const API_VERSION: &str = "v1.43";
 
 pub struct DockerRuntime {
     socket_path: PathBuf,
+    /// DNS servers set on every container created (empty => Docker's default).
+    dns: Vec<String>,
 }
 
 impl DockerRuntime {
-    pub fn new(socket_path: impl Into<PathBuf>) -> Self {
+    pub fn new(socket_path: impl Into<PathBuf>, dns: Vec<String>) -> Self {
         Self {
             socket_path: socket_path.into(),
+            dns,
         }
     }
 
@@ -433,6 +436,12 @@ struct HostConfig {
     cap_drop: Vec<String>,
     #[serde(rename = "SecurityOpt")]
     security_opt: Vec<String>,
+    // Public resolvers by default so a container can resolve download hosts
+    // (e.g. fill.papermc.io) regardless of the node's own /etc/resolv.conf —
+    // on some hosts (notably EC2) the container inherits a VPC resolver + search
+    // domain that fails these lookups. Empty => Docker's default.
+    #[serde(rename = "Dns", skip_serializing_if = "Vec::is_empty")]
+    dns: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -441,7 +450,7 @@ struct PortBindingEntry {
     host_port: String,
 }
 
-fn to_create_request(spec: &ContainerSpec) -> CreateContainerRequest {
+fn to_create_request(spec: &ContainerSpec, dns: &[String]) -> CreateContainerRequest {
     let mut port_bindings: HashMap<String, Vec<PortBindingEntry>> = HashMap::new();
     for pb in &spec.port_bindings {
         port_bindings
@@ -476,6 +485,7 @@ fn to_create_request(spec: &ContainerSpec) -> CreateContainerRequest {
             // setuid-bit privilege escalation.
             cap_drop: vec![],
             security_opt: vec!["no-new-privileges".to_string()],
+            dns: dns.to_vec(),
         },
     }
 }
@@ -496,7 +506,7 @@ impl ContainerRuntime for DockerRuntime {
             path.push_str(&spec.name);
         }
 
-        let body_bytes = serde_json::to_vec(&to_create_request(spec))?;
+        let body_bytes = serde_json::to_vec(&to_create_request(spec, &self.dns))?;
         let body = self
             .create_container(&path, &body_bytes, &spec.image, &spec.name)
             .await?;
@@ -827,7 +837,7 @@ mod tests {
             ],
             ..Default::default()
         };
-        let req = to_create_request(&spec);
+        let req = to_create_request(&spec, &[]);
         assert_eq!(req.host_config.port_bindings.len(), 2);
         assert_eq!(
             req.host_config.port_bindings["25565/tcp"][0].host_port,
@@ -841,7 +851,7 @@ mod tests {
             image: "test".into(),
             ..Default::default()
         };
-        let req = to_create_request(&spec);
+        let req = to_create_request(&spec, &[]);
         // Must NOT drop ALL — that strips CAP_SETUID/SETGID and breaks images
         // that drop from root to an unprivileged user at boot. We keep Docker's
         // default (safe) cap set and rely on no-new-privileges for hardening.
@@ -850,6 +860,20 @@ mod tests {
             req.host_config.security_opt,
             vec!["no-new-privileges".to_string()]
         );
+    }
+
+    #[test]
+    fn to_create_request_sets_dns_when_provided() {
+        let spec = ContainerSpec {
+            image: "test".into(),
+            ..Default::default()
+        };
+        let dns = vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()];
+        let req = to_create_request(&spec, &dns);
+        assert_eq!(req.host_config.dns, dns);
+        // Empty dns must serialize to no Dns field (Docker default).
+        let req_none = to_create_request(&spec, &[]);
+        assert!(req_none.host_config.dns.is_empty());
     }
 
     #[test]
