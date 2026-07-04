@@ -2,6 +2,13 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.7] - 2026-07-04
+
+### 🛠 Fixes
+
+- **A single undecodable command no longer kills the whole session.** If the panel sent a command whose payload the daemon couldn't decode, the daemon ended the entire WebSocket session (`session ended: decode command payload`) — which stopped heartbeats, stats, and console, and could crash-loop as the panel re-sent it on reconnect. Such a command is now logged and skipped, keeping the connection (and live stats) alive.
+- **Logs default to INFO** so the startup reconcile count and any dropped-command / connection warnings are visible without setting `RUST_LOG`.
+
 ## [0.4.6] - 2026-07-04
 
 ### 🛠 Fixes

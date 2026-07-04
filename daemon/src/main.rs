@@ -7,7 +7,11 @@ mod runtime;
 async fn main() {
     use std::sync::Arc;
 
-    tracing_subscriber::fmt::init();
+    // Default to INFO so operators can see startup reconcile counts and any
+    // dropped-command / connection warnings without setting RUST_LOG.
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .init();
 
     let cfg = config::Config::from_env();
     if cfg.node_token.is_empty() {

@@ -147,9 +147,17 @@ where
             return Ok(());
         }
 
-        let cmd: CommandPayload = envelope
-            .decode_payload()
-            .context("decode command payload")?;
+        // A command whose payload we can't decode must NOT tear down the whole
+        // session — doing so drops heartbeats/stats/console and, if the panel
+        // re-sends it on reconnect, becomes a crash loop. Log it and skip, the
+        // same way a malformed envelope is handled above.
+        let cmd: CommandPayload = match envelope.decode_payload() {
+            Ok(c) => c,
+            Err(err) => {
+                warn!("dropping command with an undecodable payload: {err}");
+                return Ok(());
+            }
+        };
         let dispatcher = self.dispatcher.clone();
         let ack_tx = ack_tx.clone();
         tokio::spawn(async move {
@@ -394,6 +402,67 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         panic!("timed out waiting for {server_id} to be tracked");
+    }
+
+    #[tokio::test]
+    async fn undecodable_command_is_dropped_without_killing_the_session() {
+        let (mut server, client) = local_ws_pair().await;
+        let (dispatcher, mut events_rx) = test_dispatcher();
+        let mut session = Session::new(
+            client,
+            "node-secret".to_string(),
+            dispatcher,
+            Duration::from_secs(3600),
+        );
+
+        let ct = tokio_util::sync::CancellationToken::new();
+        let ct2 = ct.clone();
+        let handle = tokio::spawn(async move { session.run(ct2, &mut events_rx).await });
+
+        server.try_next().await.unwrap().unwrap(); // drain hello
+
+        // A validly-signed COMMAND whose payload is NOT a CommandPayload (missing
+        // every required field). The old code tore the session down on this.
+        let bogus = Envelope::signed(
+            b"node-secret",
+            envelope_type::COMMAND,
+            &serde_json::json!({ "not": "a command" }),
+        )
+        .unwrap();
+        server
+            .send(Message::Text(serde_json::to_string(&bogus).unwrap()))
+            .await
+            .unwrap();
+
+        // The session must still be alive: a subsequent valid command still acks.
+        let good = CommandPayload {
+            command_id: "cmd-ok".into(),
+            action: Action::Create,
+            server_id: "server-1".into(),
+            spec: Some(ContainerSpec {
+                image: "test".into(),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        server
+            .send(Message::Text(
+                serde_json::to_string(
+                    &Envelope::signed(b"node-secret", envelope_type::COMMAND, &good).unwrap(),
+                )
+                .unwrap(),
+            ))
+            .await
+            .unwrap();
+
+        let ack_msg = server.try_next().await.unwrap().unwrap();
+        let ack_env: Envelope = serde_json::from_str(ack_msg.to_text().unwrap()).unwrap();
+        assert_eq!(ack_env.kind, envelope_type::ACK);
+        let ack: AckPayload = ack_env.decode_payload().unwrap();
+        assert_eq!(ack.command_id, "cmd-ok");
+
+        ct.cancel();
+        handle.abort();
     }
 
     #[tokio::test]
