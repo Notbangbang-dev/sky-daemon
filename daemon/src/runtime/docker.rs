@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 
 use super::demux::{parse_frame_header, LineSplitter, STREAM_STDERR, STREAM_STDOUT};
 use super::stats::{parse_docker_stats, DockerStatsResponse};
-use super::{Console, ContainerRuntime, ContainerState, Stats};
+use super::{Console, ContainerRuntime, ContainerState, ManagedContainer, Stats};
 
 const API_VERSION: &str = "v1.43";
 
@@ -378,6 +378,43 @@ impl ContainerRuntime for DockerRuntime {
         let parsed: CreateResponse =
             serde_json::from_slice(&body).context("decode create response")?;
         Ok(parsed.id)
+    }
+
+    async fn list_managed(&self) -> Result<Vec<ManagedContainer>> {
+        // Filter to containers carrying our label so we never touch anything
+        // the daemon didn't create. all=true so stopped containers are included.
+        let filters = encode_query(r#"{"label":["sky-panel.server_id"]}"#);
+        let body = self
+            .expect(
+                "GET",
+                &format!("/containers/json?all=true&filters={filters}"),
+                None,
+                &[200],
+            )
+            .await?;
+
+        #[derive(Deserialize)]
+        struct ListItem {
+            #[serde(rename = "Id")]
+            id: String,
+            #[serde(rename = "Labels", default)]
+            labels: std::collections::HashMap<String, String>,
+        }
+        let items: Vec<ListItem> =
+            serde_json::from_slice(&body).context("decode container list")?;
+
+        Ok(items
+            .into_iter()
+            .filter_map(|it| {
+                it.labels
+                    .get("sky-panel.server_id")
+                    .filter(|s| !s.is_empty())
+                    .map(|server_id| ManagedContainer {
+                        server_id: server_id.clone(),
+                        container_id: it.id,
+                    })
+            })
+            .collect())
     }
 
     async fn start(&self, id: &str) -> Result<()> {

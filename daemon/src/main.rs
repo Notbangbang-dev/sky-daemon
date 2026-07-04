@@ -21,6 +21,10 @@ async fn main() {
         agent::Dispatcher::new(rt, cfg.volumes_root.clone(), cfg.backups_root.clone());
     let dispatcher = Arc::new(dispatcher);
 
+    // Rebuild container tracking from what Docker still has, so a daemon
+    // restart resumes heartbeats/stats for servers that are still running.
+    dispatcher.reconcile().await;
+
     let ct = tokio_util::sync::CancellationToken::new();
     let ct_signal = ct.clone();
     tokio::spawn(async move {

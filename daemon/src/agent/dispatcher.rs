@@ -332,6 +332,29 @@ impl Dispatcher {
         });
     }
 
+    /// Rebuilds the server-id -> container-id map from the containers the
+    /// runtime still has (identified by their `sky-panel.server_id` label).
+    /// Called once at startup so a daemon restart doesn't silently stop
+    /// reporting heartbeats/stats for containers that are still running —
+    /// without this, `tracked` starts empty and stats never resume until the
+    /// panel happens to send another create/start for that server.
+    pub async fn reconcile(&self) {
+        match self.rt.list_managed().await {
+            Ok(found) => {
+                let mut tracked = self.tracked.lock().unwrap();
+                for mc in &found {
+                    tracked
+                        .entry(mc.server_id.clone())
+                        .or_insert_with(|| mc.container_id.clone());
+                }
+                tracing::info!("reconciled {} managed container(s) on startup", found.len());
+            }
+            Err(err) => {
+                tracing::warn!("startup reconcile failed (stats may be delayed): {err:#}");
+            }
+        }
+    }
+
     fn track(&self, server_id: &str, container_id: &str) {
         self.tracked
             .lock()
@@ -662,6 +685,39 @@ mod tests {
         let hb = d.heartbeat().await;
         assert_eq!(hb.containers.len(), 1);
         assert_eq!(hb.containers[0].server_id, "server-1");
+        assert!(hb.containers[0].running);
+    }
+
+    #[tokio::test]
+    async fn reconcile_rebuilds_tracking_after_restart() {
+        use std::collections::HashMap;
+
+        // A container already exists in the runtime (created before the
+        // "restart"), carrying the sky-panel.server_id label.
+        let rt = Arc::new(FakeRuntime::new());
+        let mut labels = HashMap::new();
+        labels.insert("sky-panel.server_id".to_string(), "server-42".to_string());
+        let id = rt
+            .create(&ContainerSpec {
+                image: "test".into(),
+                labels,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        rt.start(&id).await.unwrap();
+
+        // A fresh dispatcher (as if the daemon just restarted) starts with an
+        // empty tracked map — heartbeat reports nothing until reconcile runs.
+        let (d, _events_rx) =
+            Dispatcher::new(rt.clone(), std::env::temp_dir(), std::env::temp_dir());
+        assert_eq!(d.heartbeat().await.containers.len(), 0);
+
+        d.reconcile().await;
+
+        let hb = d.heartbeat().await;
+        assert_eq!(hb.containers.len(), 1);
+        assert_eq!(hb.containers[0].server_id, "server-42");
         assert!(hb.containers[0].running);
     }
 

@@ -35,6 +35,15 @@ pub struct ContainerState {
     pub running: bool,
 }
 
+/// A container the daemon created (identified by its `sky-panel.server_id`
+/// label), returned by `list_managed` so the dispatcher can rebuild its
+/// server-id -> container-id map after a restart.
+#[derive(Debug, Clone)]
+pub struct ManagedContainer {
+    pub server_id: String,
+    pub container_id: String,
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Stats {
     pub cpu_percent: f64,
@@ -59,6 +68,12 @@ pub trait ContainerRuntime: Send + Sync {
     /// warm-up ahead of `create` (which is what keeps first-boot fast).
     async fn pull(&self, image: &str) -> Result<()>;
     async fn create(&self, spec: &ContainerSpec) -> Result<String>;
+    /// Lists containers this daemon manages (those carrying the
+    /// `sky-panel.server_id` label), so tracking can be rebuilt on startup.
+    /// The default returns nothing — only the real Docker runtime overrides it.
+    async fn list_managed(&self) -> Result<Vec<ManagedContainer>> {
+        Ok(Vec::new())
+    }
     async fn start(&self, id: &str) -> Result<()>;
     async fn stop(&self, id: &str, timeout: Duration) -> Result<()>;
     async fn kill(&self, id: &str) -> Result<()>;

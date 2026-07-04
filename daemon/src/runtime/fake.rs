@@ -16,6 +16,9 @@ use super::{ConsoleWrites, ContainerRuntime, ContainerState, Stats};
 
 struct FakeContainer {
     running: bool,
+    /// Labels the container was created with, so `list_managed` can surface
+    /// the `sky-panel.server_id` the same way the real runtime does.
+    labels: HashMap<String, String>,
     console_writes: ConsoleWrites,
     /// Set by the most recent `attach()` call, so tests can drive fake
     /// output through whichever attach is currently active.
@@ -64,17 +67,35 @@ impl ContainerRuntime for FakeRuntime {
         Ok(())
     }
 
-    async fn create(&self, _spec: &ContainerSpec) -> Result<String> {
+    async fn create(&self, spec: &ContainerSpec) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         self.containers.lock().unwrap().insert(
             id.clone(),
             FakeContainer {
                 running: false,
+                labels: spec.labels.clone(),
                 console_writes: ConsoleWrites::default(),
                 output_tx: None,
             },
         );
         Ok(id)
+    }
+
+    async fn list_managed(&self) -> Result<Vec<super::ManagedContainer>> {
+        Ok(self
+            .containers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|(id, c)| {
+                c.labels
+                    .get("sky-panel.server_id")
+                    .map(|server_id| super::ManagedContainer {
+                        server_id: server_id.clone(),
+                        container_id: id.clone(),
+                    })
+            })
+            .collect())
     }
 
     async fn start(&self, id: &str) -> Result<()> {
