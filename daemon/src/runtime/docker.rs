@@ -943,7 +943,8 @@ mod tests {
     fn parse_response_dechunks_chunked_body() {
         // Docker returns `/containers/json` chunked: the body carries hex
         // chunk-size framing that must be stripped to yield valid JSON.
-        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n[{\"a\r\n4\r\n\":1}]\r\n0\r\n\r\n";
+        // Body split across two chunks: `[{"a` (4 bytes) then `":1}]` (5 bytes).
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n4\r\n[{\"a\r\n5\r\n\":1}]\r\n0\r\n\r\n";
         let (status, body) = parse_response(raw).unwrap();
         assert_eq!(status, 200);
         assert_eq!(body, b"[{\"a\":1}]");
