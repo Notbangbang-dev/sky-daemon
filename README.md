@@ -37,6 +37,18 @@ Environment variables (all have defaults suited to a single-node dev setup excep
 | `SKY_DOCKER_SOCKET`        | `/var/run/docker.sock`                | Docker Engine API socket                     |
 | `SKY_HEARTBEAT_INTERVAL`   | `5s`                                   | container stats push interval                |
 | `SKY_VOLUMES_ROOT`         | `/srv/sky-panel/volumes`               | host root under which each server gets `{server_id}/` |
+| `SKY_BACKUPS_ROOT`         | `/srv/sky-panel/backups`               | host root for server backup archives         |
+| `SKY_CONTAINER_DNS`        | `1.1.1.1,8.8.8.8`                       | DNS servers injected into created containers (empty = Docker default) |
+| `SKY_DB_ADMIN_USER`        | *(unset → databases off)*              | MariaDB admin user; **setting this enables the databases feature** |
+| `SKY_DB_ADMIN_PASSWORD`    | *(empty)*                              | password for the admin user                  |
+| `SKY_DB_ADMIN_HOST`        | `127.0.0.1`                            | host the daemon dials to run admin DDL       |
+| `SKY_DB_ADMIN_PORT`        | `3306`                                 | MariaDB port                                 |
+| `SKY_DB_PUBLIC_HOST`       | *(falls back to admin host)*           | address handed to users in their connection string (the node's public IP/hostname) |
+| `SKY_DB_PUBLIC_PORT`       | *(falls back to admin port)*           | port handed to users when the published port differs from the admin port (NAT/proxy) |
+
+### Databases (per-node MariaDB)
+
+When `SKY_DB_ADMIN_USER` is set, the daemon advertises the `databases` capability and can provision per-user MariaDB databases on request. See **[sky-panel's databases guide](https://github.com/Notbangbang-dev/sky-panel/blob/main/docs/DATABASES.md)** for the full node setup (install MariaDB, create the admin user, open port 3306, wire the env vars). The daemon connects to the admin over loopback; it only runs `CREATE DATABASE` / `CREATE USER` / `GRANT` / `DROP` with panel-generated, charset-validated identifiers.
 
 `sky-daemon` only supports Linux/Unix targets — it drives Docker over a Unix socket and doesn't have a Windows code path (the binary builds on Windows for development, but its `main()` immediately exits with an explanatory error there; this is intentional, not a bug).
 

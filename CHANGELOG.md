@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.0] - 2026-07-05
+
+### ✨ New Features
+
+- **Database provisioning.** The daemon can now create and drop per-user MariaDB databases on the node's local database server, driving Sky Panel's new Databases feature. Set `SKY_DB_ADMIN_USER` (+ `SKY_DB_ADMIN_PASSWORD`, and `SKY_DB_PUBLIC_HOST` for the address users connect to) to turn it on; the daemon then advertises a `databases` capability so the panel offers it only where it's configured. It runs `CREATE DATABASE` / `CREATE USER` / `GRANT` / `DROP` with panel-generated, charset-validated identifiers over a loopback admin connection. See [sky-panel's setup guide](https://github.com/Notbangbang-dev/sky-panel/blob/main/docs/DATABASES.md).
+
 ## [0.4.9] - 2026-07-04
 
 ### 🛠 Fixes

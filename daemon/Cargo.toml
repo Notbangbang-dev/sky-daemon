@@ -1,6 +1,6 @@
 [package]
 name = "sky-daemon"
-version = "0.1.0"
+version = "0.5.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -31,6 +31,11 @@ base64 = "0.22"
 hex = "0.4"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+
+# MariaDB/MySQL admin client for provisioning per-user databases on the node's
+# local database server. `minimal-rust` = pure-Rust flate2 backend, no TLS and
+# no C dependencies (connections to the local DB are plaintext over loopback).
+mysql_async = { version = "0.37", default-features = false, features = ["minimal-rust"] }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -65,10 +65,14 @@ where
         ct: tokio_util::sync::CancellationToken,
         events_rx: &mut mpsc::UnboundedReceiver<EventPayload>,
     ) -> Result<()> {
+        let mut capabilities = vec![protocol::CAP_PULL_IMAGE.to_string()];
+        if self.dispatcher.database_enabled() {
+            capabilities.push(protocol::CAP_DATABASES.to_string());
+        }
         let hello = HelloPayload {
             node_token: self.node_token.clone(),
             agent_version: AGENT_VERSION.to_string(),
-            capabilities: vec![protocol::CAP_PULL_IMAGE.to_string()],
+            capabilities,
         };
         self.send_signed(envelope_type::HELLO, &hello)
             .await

@@ -7,8 +7,9 @@
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use protocol::{
-    AckPayload, Action, BackupEntry, BackupResult, CommandPayload, ContainerHeartbeat, EventKind,
-    EventPayload, FileEntry, HeartbeatPayload, ListBackupsResult, ListFilesResult, ReadFileResult,
+    AckPayload, Action, BackupEntry, BackupResult, CommandPayload, ContainerHeartbeat,
+    CreateDatabaseResult, EventKind, EventPayload, FileEntry, HeartbeatPayload, ListBackupsResult,
+    ListFilesResult, ReadFileResult,
 };
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
@@ -17,6 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::sync::{mpsc, Mutex as AsyncMutex};
 
+use crate::db::DbAdmin;
 use crate::runtime::ContainerRuntime;
 
 /// Files handled through the command channel are for config-editing, not
@@ -41,6 +43,9 @@ pub struct Dispatcher {
     /// map is what prevents `start` from attaching a second time.
     consoles: Arc<StdMutex<HashMap<String, Arc<ActiveConsole>>>>,
     events_tx: mpsc::UnboundedSender<EventPayload>,
+    /// MariaDB admin connection for provisioning databases — present only when
+    /// the operator configured `SKY_DB_ADMIN_*` on this node.
+    db: Option<Arc<DbAdmin>>,
 }
 
 impl Dispatcher {
@@ -60,8 +65,21 @@ impl Dispatcher {
             tracked: StdMutex::new(HashMap::new()),
             consoles: Arc::new(StdMutex::new(HashMap::new())),
             events_tx,
+            db: None,
         };
         (dispatcher, events_rx)
+    }
+
+    /// Enables database provisioning with the given admin connection. Called at
+    /// startup when `SKY_DB_ADMIN_*` is set, before the dispatcher is shared.
+    pub fn set_db(&mut self, db: Arc<DbAdmin>) {
+        self.db = Some(db);
+    }
+
+    /// Whether this node can provision databases, so the session can advertise
+    /// the `databases` capability to the panel.
+    pub fn database_enabled(&self) -> bool {
+        self.db.is_some()
     }
 
     /// Executes one command and returns the ack to send back. Never
@@ -224,6 +242,45 @@ impl Dispatcher {
             Action::DeleteBackup => {
                 let name = cmd.path.as_deref().context("delete_backup missing path")?;
                 self.delete_backup(&cmd.server_id, name).await?;
+                Ok(None)
+            }
+            Action::CreateDatabase => {
+                let db = self
+                    .db
+                    .as_ref()
+                    .context("databases are not configured on this node")?;
+                let name = cmd
+                    .database_name
+                    .as_deref()
+                    .context("create_database missing database_name")?;
+                let user = cmd
+                    .database_user
+                    .as_deref()
+                    .context("create_database missing database_user")?;
+                let password = cmd
+                    .database_password
+                    .as_deref()
+                    .context("create_database missing database_password")?;
+                db.create_database(name, user, password).await?;
+                Ok(Some(serde_json::to_value(CreateDatabaseResult {
+                    host: db.public_host().to_string(),
+                    port: db.public_port(),
+                })?))
+            }
+            Action::DeleteDatabase => {
+                let db = self
+                    .db
+                    .as_ref()
+                    .context("databases are not configured on this node")?;
+                let name = cmd
+                    .database_name
+                    .as_deref()
+                    .context("delete_database missing database_name")?;
+                let user = cmd
+                    .database_user
+                    .as_deref()
+                    .context("delete_database missing database_user")?;
+                db.delete_database(name, user).await?;
                 Ok(None)
             }
         }

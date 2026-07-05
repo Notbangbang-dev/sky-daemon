@@ -1,5 +1,6 @@
 mod agent;
 mod config;
+mod db;
 mod runtime;
 
 #[cfg(unix)]
@@ -23,8 +24,17 @@ async fn main() {
         cfg.docker_socket.clone(),
         cfg.container_dns.clone(),
     ));
-    let (dispatcher, events_rx) =
+    let (mut dispatcher, events_rx) =
         agent::Dispatcher::new(rt, cfg.volumes_root.clone(), cfg.backups_root.clone());
+    if let Some(dbcfg) = cfg.database.as_ref() {
+        dispatcher.set_db(Arc::new(db::DbAdmin::new(dbcfg)));
+        tracing::info!(
+            "database provisioning enabled (admin {}:{}, public host {})",
+            dbcfg.admin_host,
+            dbcfg.admin_port,
+            dbcfg.public_host
+        );
+    }
     let dispatcher = Arc::new(dispatcher);
 
     // Rebuild container tracking from what Docker still has, so a daemon

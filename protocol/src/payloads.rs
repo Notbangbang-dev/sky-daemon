@@ -26,6 +26,12 @@ pub struct HelloPayload {
 /// (image pre-warming), added in the v0.4.0 line.
 pub const CAP_PULL_IMAGE: &str = "pull_image";
 
+/// Capability token: this daemon understands `create_database` /
+/// `delete_database` and has (or can have) a MariaDB admin connection
+/// configured. Advertised whenever the daemon build supports the commands, so
+/// the panel can gate the feature and give a clean error on older nodes.
+pub const CAP_DATABASES: &str = "databases";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContainerHeartbeat {
     pub server_id: String,
@@ -126,6 +132,12 @@ pub enum Action {
     ListBackups,
     RestoreBackup,
     DeleteBackup,
+    /// Create a MariaDB database + user on the node's local database server.
+    /// The panel supplies the (already-generated) name/user/password; the node
+    /// just runs the DDL and returns the public host/port to connect to.
+    CreateDatabase,
+    /// Drop a MariaDB database + its user on the node's database server.
+    DeleteDatabase,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -153,6 +165,15 @@ pub struct CommandPayload {
     /// channel is for config-file-sized edits, not bulk transfer).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_base64: Option<String>,
+    /// `create_database` / `delete_database`: the database name to create/drop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_name: Option<String>,
+    /// `create_database` / `delete_database`: the MariaDB user to create/drop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_user: Option<String>,
+    /// `create_database`: the password for the created user.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_password: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -203,6 +224,15 @@ pub struct BackupEntry {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ListBackupsResult {
     pub backups: Vec<BackupEntry>,
+}
+
+/// Returned from `create_database` — the address a client uses to connect. The
+/// panel already holds the name/user/password it generated, so only the
+/// node-specific endpoint needs to come back.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct CreateDatabaseResult {
+    pub host: String,
+    pub port: u16,
 }
 
 #[cfg(test)]
