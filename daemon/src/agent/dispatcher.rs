@@ -126,6 +126,13 @@ impl Dispatcher {
             Action::Start => {
                 let id = self.container_for(cmd)?;
                 self.rt.start(&id).await?;
+                // Ensure the container is tracked so heartbeats report its
+                // stats. Without this, a container reached via cmd.container_id
+                // (e.g. after a daemon restart where reconcile didn't match it)
+                // would stream console output but never appear in the stats
+                // heartbeat — the server shows a live console/roster but its
+                // CPU/memory/network cards stay blank.
+                self.track(&cmd.server_id, &id);
                 self.emit_state_changed(&cmd.server_id, "running");
                 self.start_console_stream(cmd.server_id.clone(), id).await;
                 Ok(None)
@@ -738,6 +745,35 @@ mod tests {
         };
         d.handle(&create).await;
         d.handle(&cmd(Action::Start, "server-1")).await;
+
+        let hb = d.heartbeat().await;
+        assert_eq!(hb.containers.len(), 1);
+        assert_eq!(hb.containers[0].server_id, "server-1");
+        assert!(hb.containers[0].running);
+    }
+
+    #[tokio::test]
+    async fn start_via_container_id_tracks_for_heartbeat() {
+        // Simulates a daemon that restarted and lost its tracked map, then the
+        // panel sends Start with an explicit container_id (reconcile didn't
+        // match the container). The container must still show up in heartbeats
+        // so its stats cards aren't blank.
+        let rt = Arc::new(FakeRuntime::new());
+        let id = rt
+            .create(&ContainerSpec {
+                image: "test".into(),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let (d, _events_rx) =
+            Dispatcher::new(rt.clone(), std::env::temp_dir(), std::env::temp_dir());
+        assert_eq!(d.heartbeat().await.containers.len(), 0);
+
+        let mut start = cmd(Action::Start, "server-1");
+        start.container_id = Some(id);
+        assert!(d.handle(&start).await.ok);
 
         let hb = d.heartbeat().await;
         assert_eq!(hb.containers.len(), 1);

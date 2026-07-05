@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.1] - 2026-07-05
+
+### 🛠 Fixes
+
+- **Live stats now show for every running server.** A server started via an explicit container id — which happens after a daemon restart when startup reconcile didn't match the container — streamed its console (so the roster/version showed) but was never added to the stats-tracking map, so its CPU / memory / network cards stayed blank and the public status page reported `0.0% / 0 B`. `start` now tracks the container it starts, so heartbeat stats flow regardless of how the container was resolved. Restart the affected server (or the daemon) once after updating to pick up stats for an already-running container.
+
 ## [0.5.0] - 2026-07-05
 
 ### ✨ New Features
