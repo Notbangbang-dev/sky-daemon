@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.5.2] - 2026-07-05
+
+### 🛠 Fixes
+
+- **Startup reconcile now works — this is the real fix for blank live stats.** The Docker Engine returns `GET /containers/json` with `Transfer-Encoding: chunked`, but the daemon's HTTP response reader handed the body to the JSON parser without stripping the chunk framing, so the container list failed to decode (`decode container list: invalid type: integer …, expected a sequence`). Reconcile therefore failed on every daemon start, leaving the stats-tracking map empty — so a running server streamed its console (roster/version showed) but reported no CPU / memory / network. The reader now de-chunks chunked responses. After updating, a running server's stats come back on the next daemon restart, no server restart needed. (Single-object endpoints like create/inspect use Content-Length and were unaffected, which is why servers still started and consoles still streamed.)
+
 ## [0.5.1] - 2026-07-05
 
 ### 🛠 Fixes

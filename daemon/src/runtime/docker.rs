@@ -388,7 +388,62 @@ fn parse_response(buf: &[u8]) -> Result<(u16, Vec<u8>)> {
     let code = resp
         .code
         .ok_or_else(|| anyhow!("docker api response missing status code"))?;
-    Ok((code, buf[header_len..].to_vec()))
+
+    // Docker streams larger responses (notably `/containers/json`) with
+    // Transfer-Encoding: chunked. The body then carries hex chunk-size framing
+    // that must be stripped before it's valid JSON — otherwise the parser sees
+    // the leading chunk size (e.g. `1054`) instead of the `[`.
+    let chunked = resp.headers.iter().any(|h| {
+        h.name.eq_ignore_ascii_case("transfer-encoding")
+            && String::from_utf8_lossy(h.value)
+                .to_ascii_lowercase()
+                .contains("chunked")
+    });
+
+    let body = &buf[header_len..];
+    let body = if chunked {
+        dechunk(body)?
+    } else {
+        body.to_vec()
+    };
+    Ok((code, body))
+}
+
+/// Decodes an HTTP/1.1 chunked transfer-encoding body into its raw payload:
+/// each chunk is a hex size line, CRLF, that many bytes, CRLF; a zero-size
+/// chunk terminates.
+fn dechunk(mut data: &[u8]) -> Result<Vec<u8>> {
+    let mut out = Vec::new();
+    loop {
+        let nl = data
+            .windows(2)
+            .position(|w| w == b"\r\n")
+            .context("chunked body: missing chunk-size line")?;
+        // A chunk size line may carry `;ext` extensions after the hex size.
+        let size_field = data[..nl]
+            .split(|&b| b == b';')
+            .next()
+            .unwrap_or(&data[..nl]);
+        let size_str = std::str::from_utf8(size_field)
+            .context("chunked body: chunk size not UTF-8")?
+            .trim();
+        let size =
+            usize::from_str_radix(size_str, 16).context("chunked body: invalid chunk size")?;
+        data = &data[nl + 2..];
+        if size == 0 {
+            break;
+        }
+        if data.len() < size {
+            bail!("chunked body: truncated chunk");
+        }
+        out.extend_from_slice(&data[..size]);
+        data = &data[size..];
+        // Skip the CRLF that follows each chunk's data.
+        if data.len() >= 2 && &data[..2] == b"\r\n" {
+            data = &data[2..];
+        }
+    }
+    Ok(out)
 }
 
 fn extract_docker_error(body: &[u8]) -> String {
@@ -882,6 +937,25 @@ mod tests {
         let (status, body) = parse_response(raw).unwrap();
         assert_eq!(status, 201);
         assert_eq!(body, b"{\"Id\":\"abc\"}");
+    }
+
+    #[test]
+    fn parse_response_dechunks_chunked_body() {
+        // Docker returns `/containers/json` chunked: the body carries hex
+        // chunk-size framing that must be stripped to yield valid JSON.
+        let raw = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n5\r\n[{\"a\r\n4\r\n\":1}]\r\n0\r\n\r\n";
+        let (status, body) = parse_response(raw).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"[{\"a\":1}]");
+        // And it's now valid JSON the container-list parser can accept.
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(v.is_array());
+    }
+
+    #[test]
+    fn dechunk_handles_size_extensions_and_terminator() {
+        let out = dechunk(b"3;name=x\r\nabc\r\n0\r\n\r\n").unwrap();
+        assert_eq!(out, b"abc");
     }
 
     #[test]
