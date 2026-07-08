@@ -1,6 +1,13 @@
 mod demux;
 mod stats;
 
+// Best-effort ufw automation. It's only invoked from the unix-only Docker
+// runtime, but its parsing/port-extraction helpers are unit-tested from any
+// dev machine — so compile it whenever we build for unix OR run tests, exactly
+// like the docker module below.
+#[cfg(any(unix, test))]
+mod firewall;
+
 // The real Docker client dials a unix socket, so it (and its tests) only
 // build on unix targets. sky-daemon itself only ever ships for Linux, but
 // gating this way keeps `cargo build`/`cargo test` for the rest of the

@@ -23,6 +23,7 @@ async fn main() {
     let rt: Arc<dyn runtime::ContainerRuntime> = Arc::new(runtime::DockerRuntime::new(
         cfg.docker_socket.clone(),
         cfg.container_dns.clone(),
+        cfg.manage_firewall,
     ));
     let (mut dispatcher, events_rx) =
         agent::Dispatcher::new(rt, cfg.volumes_root.clone(), cfg.backups_root.clone());

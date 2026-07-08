@@ -2,6 +2,12 @@
 
 All notable changes to sky-daemon are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-07-08
+
+### ✨ New Features
+
+- **Automatic firewall port-forwarding (ufw).** When the daemon creates a container it now opens each published port (TCP + UDP) in the host's `ufw` firewall, so an allocated game port is reachable without hand-writing a rule. Best-effort by design: if `ufw` isn't installed, the daemon lacks privileges, or a rule fails, it logs one actionable line (`sudo ufw allow <port>`) and carries on — it never fails a container create. Configure with `SKY_MANAGE_FIREWALL`: `auto` (default, run `ufw` directly), `sudo` (run `sudo -n ufw` for a non-root daemon), or `off` (never touch the firewall). Linux-only; a no-op on other platforms. On a cloud host you still need to open the port in the provider's security group.
+
 ## [0.5.3] - 2026-07-05
 
 ### 🛠 Fixes

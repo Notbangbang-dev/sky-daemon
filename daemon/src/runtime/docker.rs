@@ -27,13 +27,20 @@ pub struct DockerRuntime {
     socket_path: PathBuf,
     /// DNS servers set on every container created (empty => Docker's default).
     dns: Vec<String>,
+    /// How to open published ports in the host firewall (ufw) on create.
+    manage_firewall: crate::config::FirewallMode,
 }
 
 impl DockerRuntime {
-    pub fn new(socket_path: impl Into<PathBuf>, dns: Vec<String>) -> Self {
+    pub fn new(
+        socket_path: impl Into<PathBuf>,
+        dns: Vec<String>,
+        manage_firewall: crate::config::FirewallMode,
+    ) -> Self {
         Self {
             socket_path: socket_path.into(),
             dns,
+            manage_firewall,
         }
     }
 
@@ -573,6 +580,14 @@ impl ContainerRuntime for DockerRuntime {
         }
         let parsed: CreateResponse =
             serde_json::from_slice(&body).context("decode create response")?;
+
+        // Best-effort: open the host firewall (ufw) for the ports we just asked
+        // Docker to publish, so the allocation is reachable without a manual
+        // rule. Runs AFTER the container exists so a firewall hiccup can never
+        // fail provisioning; open_ports itself never returns an error.
+        let ports = super::firewall::ports_from_bindings(&spec.port_bindings);
+        super::firewall::open_ports(self.manage_firewall, &ports).await;
+
         Ok(parsed.id)
     }
 

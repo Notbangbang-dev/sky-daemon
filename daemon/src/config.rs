@@ -8,7 +8,35 @@ pub struct Config {
     pub volumes_root: String,
     pub backups_root: String,
     pub container_dns: Vec<String>,
+    pub manage_firewall: FirewallMode,
     pub database: Option<DatabaseConfig>,
+}
+
+/// How the daemon manages the host firewall (ufw) for published game ports.
+/// Ported from cloud-panel's `manageFirewall` setting. Best-effort only — the
+/// firewall module never fails a container create over this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FirewallMode {
+    /// Never touch the firewall.
+    Off,
+    /// Run `ufw` directly (the daemon runs with enough privilege — typically
+    /// as root, which node daemons usually do to reach the Docker socket).
+    #[default]
+    Auto,
+    /// Run `sudo -n ufw` — for a non-root daemon with a sudoers rule for ufw.
+    Sudo,
+}
+
+impl FirewallMode {
+    /// Parse the `SKY_MANAGE_FIREWALL` value. Anything unrecognised falls back
+    /// to `Auto` (the convenient default), matching cloud-panel's behaviour.
+    pub fn from_env_str(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "disabled" | "false" | "0" | "none" => Self::Off,
+            "sudo" => Self::Sudo,
+            _ => Self::Auto,
+        }
+    }
 }
 
 /// Connection details for the node's local MariaDB/MySQL server. Present only
@@ -43,6 +71,10 @@ impl Config {
             // hosts regardless of the node's resolver. Comma-separated; set to
             // empty ("SKY_CONTAINER_DNS=") to use Docker's default instead.
             container_dns: env_list("SKY_CONTAINER_DNS", "1.1.1.1,8.8.8.8"),
+            // Best-effort host firewall (ufw) automation for published ports.
+            // `auto` (default) opens each port; `off` disables; `sudo` uses
+            // `sudo -n ufw` for a non-root daemon.
+            manage_firewall: FirewallMode::from_env_str(&env_or("SKY_MANAGE_FIREWALL", "auto")),
             database: DatabaseConfig::from_env(),
         }
     }
@@ -103,4 +135,25 @@ fn env_u16(key: &str, fallback: u16) -> u16 {
         .ok()
         .and_then(|v| v.parse::<u16>().ok())
         .unwrap_or(fallback)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn firewall_mode_parses_known_values() {
+        assert_eq!(FirewallMode::from_env_str("off"), FirewallMode::Off);
+        assert_eq!(FirewallMode::from_env_str("OFF"), FirewallMode::Off);
+        assert_eq!(FirewallMode::from_env_str("disabled"), FirewallMode::Off);
+        assert_eq!(FirewallMode::from_env_str(" sudo "), FirewallMode::Sudo);
+        assert_eq!(FirewallMode::from_env_str("auto"), FirewallMode::Auto);
+    }
+
+    #[test]
+    fn firewall_mode_defaults_to_auto() {
+        assert_eq!(FirewallMode::from_env_str(""), FirewallMode::Auto);
+        assert_eq!(FirewallMode::from_env_str("garbage"), FirewallMode::Auto);
+        assert_eq!(FirewallMode::default(), FirewallMode::Auto);
+    }
 }
